@@ -1,5 +1,5 @@
 from collections import Counter
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -9,6 +9,27 @@ from app.models.track import Track
 from app.models.artist import Artist
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
+
+
+from datetime import datetime, date
+
+
+def _to_iso(value):
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
+def _normalize_genres(genres_value):
+    if not genres_value:
+        return []
+    if isinstance(genres_value, (list, tuple, set)):
+        raw = ",".join(str(x) for x in genres_value if x)
+    else:
+        raw = str(genres_value)
+    return [g.strip().lower() for g in raw.split(",") if g.strip()]
 
 
 @router.get("/genre-distribution")
@@ -21,74 +42,66 @@ def genre_distribution(
     Returns genre distribution for the latest fetched_at snapshot in a given country.
     genres are stored as CSV in artists.genres (e.g., "pop,rock,indie").
     """
+    try:
+        latest_time = (
+            db.query(func.max(TrackTrend.fetched_at))
+            .filter(TrackTrend.country == country)
+            .scalar()
+        )
 
-    # 1) find latest snapshot time for that country
-    latest_time = (
-        db.query(func.max(TrackTrend.fetched_at))
-        .filter(TrackTrend.country == country)
-        .scalar()
-    )
+        if not latest_time:
+            return {
+                "country": country,
+                "latest_fetched_at": None,
+                "total_tracks": 0,
+                "top_n": top_n,
+                "genres": [],
+                "note": "No track_trends data. Run Last.fm ETL first.",
+            }
 
-    if not latest_time:
+        rows = (
+            db.query(Artist.genres)
+            .join(Track, Track.artist_id == Artist.id)
+            .join(TrackTrend, TrackTrend.track_id == Track.id)
+            .filter(TrackTrend.country == country, TrackTrend.fetched_at == latest_time)
+            .all()
+        )
+
+        counter = Counter()
+        for (genres_value,) in rows:
+            counter.update(_normalize_genres(genres_value))
+
+        total_tags = sum(counter.values())
+
+        if total_tags == 0:
+            return {
+                "country": country,
+                "latest_fetched_at": _to_iso(latest_time),
+                "total_tracks": len(rows),
+                "top_n": top_n,
+                "genres": [],
+                "note": "No genre tags found. Run MusicBrainz ETL.",
+            }
+
+        top = counter.most_common(top_n)
+
         return {
             "country": country,
-            "latest_fetched_at": None,
-            "total_tracks": 0,
+            "latest_fetched_at": _to_iso(latest_time),
+            "total_tracks": len(rows),
             "top_n": top_n,
-            "genres": [],
-            "note": "No track_trends data for this country yet. Run Last.fm ETL first.",
+            "genres": [
+                {
+                    "genre": g,
+                    "count": c,
+                    "percentage": round((c / total_tags) * 100, 2),
+                }
+                for g, c in top
+            ],
         }
 
-    # 2) get artists.genres for tracks in the latest snapshot
-    rows = (
-        db.query(Artist.genres)
-        .join(Track, Track.artist_id == Artist.id)
-        .join(TrackTrend, TrackTrend.track_id == Track.id)
-        .filter(TrackTrend.country == country, TrackTrend.fetched_at == latest_time)
-        .all()
-    )
-
-    total_tracks = len(rows)
-    counter = Counter()
-
-    for (genres_csv,) in rows:
-        if not genres_csv:
-            continue
-        parts = [g.strip().lower() for g in genres_csv.split(",") if g.strip()]
-        counter.update(parts)
-
-    total_tags = sum(counter.values())
-
-    # If no genres exist yet (MusicBrainz ETL not run or no tags found)
-    if total_tags == 0:
-        return {
-            "country": country,
-            "latest_fetched_at": latest_time,
-            "total_tracks": total_tracks,
-            "top_n": top_n,
-            "genres": [],
-            "note": "No genre tags found. Run MusicBrainz ETL to enrich artists.genres.",
-        }
-
-    top = counter.most_common(top_n)
-
-    result = [
-        {
-            "genre": genre,
-            "count": count,
-            "percentage": round((count / total_tags) * 100, 2),
-        }
-        for genre, count in top
-    ]
-
-    return {
-        "country": country,
-        "latest_fetched_at": latest_time,
-        "total_tracks": total_tracks,
-        "top_n": top_n,
-        "total_genre_tags_counted": total_tags,
-        "genres": result,
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"genre_distribution failed: {e}")
 
 
 @router.get("/top-artists-by-country")
@@ -139,7 +152,7 @@ def top_artists_by_country(
 
     artists = []
     for r in rows:
-        genres_list = [g.strip() for g in (r.genres or "").split(",") if g.strip()]
+        genres_list = _normalize_genres(r.genres)
         artists.append(
             {
                 "artist_id": r.artist_id,
@@ -152,7 +165,7 @@ def top_artists_by_country(
 
     return {
         "country": country,
-        "latest_fetched_at": latest_time,
+        "latest_fetched_at": _to_iso(latest_time),
         "top_n": top_n,
         "artists": artists,
     }
@@ -217,7 +230,7 @@ def artist_nationality_distribution(
 
     return {
         "country": country,
-        "latest_fetched_at": latest_time,
+        "latest_fetched_at": _to_iso(latest_time),
         "total_artists": total_artists,
         "top_n": top_n,
         "nationalities": result,
@@ -252,9 +265,7 @@ def country_genre_comparison(
         )
         counter = Counter()
         for (genres_csv,) in rows:
-            if not genres_csv:
-                continue
-            parts = [g.strip().lower() for g in genres_csv.split(",") if g.strip()]
+            parts = _normalize_genres(genres_csv)
             counter.update(parts)
         return counter, len(rows)
 
@@ -265,8 +276,8 @@ def country_genre_comparison(
         return {
             "country_1": c1,
             "country_2": c2,
-            "latest_fetched_at_1": latest_1,
-            "latest_fetched_at_2": latest_2,
+            "latest_fetched_at_1": _to_iso(latest_1),
+            "latest_fetched_at_2": _to_iso(latest_2),
             "top_n": top_n,
             "genres": [],
             "note": "Missing snapshot data for one or both countries. Run Last.fm ETL for both countries first.",
@@ -282,8 +293,8 @@ def country_genre_comparison(
         return {
             "country_1": c1,
             "country_2": c2,
-            "latest_fetched_at_1": latest_1,
-            "latest_fetched_at_2": latest_2,
+            "latest_fetched_at_1": _to_iso(latest_1),
+            "latest_fetched_at_2": _to_iso(latest_2),
             "total_tracks_1": total_tracks_1,
             "total_tracks_2": total_tracks_2,
             "total_genre_tags_1": total_tags_1,
@@ -312,8 +323,8 @@ def country_genre_comparison(
     return {
         "country_1": c1,
         "country_2": c2,
-        "latest_fetched_at_1": latest_1,
-        "latest_fetched_at_2": latest_2,
+        "latest_fetched_at_1": _to_iso(latest_1),
+        "latest_fetched_at_2": _to_iso(latest_2),
         "total_tracks_1": total_tracks_1,
         "total_tracks_2": total_tracks_2,
         "total_genre_tags_1": total_tags_1,
