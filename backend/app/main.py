@@ -14,26 +14,30 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, "..", ".env")
 load_dotenv(dotenv_path=ENV_PATH)
 
-# CORS origins: comma-separated list in env (useful for Railway), with local dev defaults
-cors_origins_env = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
-)
-cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-
-# create app FIRST
+# ---- App ----
 app = FastAPI(title="MusicScope API")
 
-@app.on_event("startup")
-def _startup_create_tables():
-    init_db()
+# ---- CORS ----
+# In Railway/production, it's easy for the frontend domain to differ (preview, custom domain, etc.).
+# So we support an env var and fall back to allowing all origins.
+# Examples:
+#   ALLOWED_ORIGINS=https://musicscope-frontend-production.up.railway.app,https://mydomain.com
+#   ALLOWED_ORIGINS=*
+allowed_origins_raw = os.getenv(
+    "ALLOWED_ORIGINS",
+    "https://musicscope-frontend-production.up.railway.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
+)
 
+allowed_origins_raw = allowed_origins_raw.strip()
+if allowed_origins_raw == "*":
+    cors_origins = ["*"]
+else:
+    cors_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
 
-# CORS (only once)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
