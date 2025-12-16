@@ -18,11 +18,6 @@ load_dotenv(dotenv_path=ENV_PATH)
 app = FastAPI(title="MusicScope API")
 
 # ---- CORS ----
-# In Railway/production, it's easy for the frontend domain to differ (preview, custom domain, etc.).
-# So we support an env var and fall back to allowing all origins.
-# Examples:
-#   ALLOWED_ORIGINS=https://musicscope-frontend-production.up.railway.app,https://mydomain.com
-#   ALLOWED_ORIGINS=*
 allowed_origins_raw = os.getenv(
     "ALLOWED_ORIGINS",
     "https://musicscope-frontend-production.up.railway.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
