@@ -15,8 +15,8 @@ import {
 } from "recharts";
 
 export default function App() {
-  const [country, setCountry] = useState("Spain");
-  const [compareCountry, setCompareCountry] = useState("United States");
+  const [country, setCountry] = useState("spain");
+  const [compareCountry, setCompareCountry] = useState("united states");
 
   const [genreData, setGenreData] = useState(null);
   const [artistData, setArtistData] = useState(null);
@@ -28,6 +28,30 @@ export default function App() {
   const [etlLoading, setEtlLoading] = useState(false);
   const [etlMsg, setEtlMsg] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Canonical values used for API/DB lookups should be lowercase.
+  // Labels are what the user sees.
+  const COUNTRY_OPTIONS = [
+    { value: "spain", label: "Spain" },
+    { value: "united states", label: "United States" },
+    { value: "south korea", label: "South Korea" },
+    { value: "mexico", label: "Mexico" },
+  ];
+
+  const normalizeCountry = (v) => String(v ?? "").trim().toLowerCase();
+
+  const countryLabel = useMemo(() => {
+    const v = normalizeCountry(country);
+    return COUNTRY_OPTIONS.find((o) => o.value === v)?.label || country;
+  }, [country]);
+
+  const compareCountryLabel = useMemo(() => {
+    const v = normalizeCountry(compareCountry);
+    return COUNTRY_OPTIONS.find((o) => o.value === v)?.label || compareCountry;
+  }, [compareCountry]);
+
+  const c1 = useMemo(() => normalizeCountry(country), [country]);
+  const c2 = useMemo(() => normalizeCountry(compareCountry), [compareCountry]);
 
   // ---- Theme (single-blue palette) ----
   const COLORS = {
@@ -186,15 +210,15 @@ export default function App() {
     setComparisonData(null);
 
     const comparisonPromise =
-      compareCountry === country
+      c2 === c1
         ? Promise.resolve({ data: null })
         : api.get("/analytics/country-genre-comparison", {
-            params: { c1: country, c2: compareCountry, top_n: 10 },
+            params: { c1, c2, top_n: 10 },
           });
 
     Promise.all([
-      api.get("/analytics/genre-distribution", { params: { country, top_n: 10 } }),
-      api.get("/analytics/top-artists-by-country", { params: { country, top_n: 10 } }),
+      api.get("/analytics/genre-distribution", { params: { country: c1, top_n: 10 } }),
+      api.get("/analytics/top-artists-by-country", { params: { country: c1, top_n: 10 } }),
       comparisonPromise,
     ])
       .then(([gRes, aRes, cRes]) => {
@@ -203,7 +227,7 @@ export default function App() {
         setComparisonData(cRes.data);
       })
       .catch((e) => setError(e?.response?.data?.detail || e.message));
-  }, [country, compareCountry, refreshKey]);
+  }, [country, compareCountry, refreshKey, c1, c2]);
 
   const pieData = useMemo(() => {
     if (!genreData?.genres) return [];
@@ -229,8 +253,8 @@ export default function App() {
     try {
       setEtlLoading(true);
       setEtlMsg("");
-      await api.post("/etl/lastfm/run", null, { params: { country, limit: 20 } });
-      setEtlMsg(`Last.fm ETL done for ${country}. Refreshing charts...`);
+      await api.post("/etl/lastfm/run", null, { params: { country: c1, limit: 20 } });
+      setEtlMsg(`Last.fm ETL done for ${countryLabel}. Refreshing charts...`);
       setRefreshKey((v) => v + 1);
     } catch (e) {
       setEtlMsg(e?.response?.data?.detail || e.message);
@@ -263,10 +287,11 @@ export default function App() {
         <label style={styles.label}>
           Country
           <select style={styles.select} value={country} onChange={(e) => setCountry(e.target.value)}>
-            <option>Spain</option>
-            <option>United States</option>
-            <option>South Korea</option>
-            <option>Mexico</option>
+            {COUNTRY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -366,19 +391,20 @@ export default function App() {
                   value={compareCountry}
                   onChange={(e) => setCompareCountry(e.target.value)}
                 >
-                  <option>Spain</option>
-                  <option>United States</option>
-                  <option>South Korea</option>
-                  <option>Mexico</option>
+                  {COUNTRY_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>
 
             <p style={styles.meta}>
-              Comparing <b>{country}</b> vs <b>{compareCountry}</b> (Top 10 genres)
+              Comparing <b>{countryLabel}</b> vs <b>{compareCountryLabel}</b> (Top 10 genres)
             </p>
 
-            {compareCountry === country ? (
+            {c2 === c1 ? (
               <p style={styles.meta}>Please choose a different country to compare.</p>
             ) : comparisonBarData.length === 0 ? (
               <p style={styles.meta}>No comparison data. Run ETL for both countries.</p>
@@ -391,10 +417,10 @@ export default function App() {
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="c1_count" name={country} fill={COLORS.primary} radius={[8, 8, 0, 0]} />
+                    <Bar dataKey="c1_count" name={countryLabel} fill={COLORS.primary} radius={[8, 8, 0, 0]} />
                     <Bar
                       dataKey="c2_count"
-                      name={compareCountry}
+                      name={compareCountryLabel}
                       fill={COLORS.primaryLight}
                       radius={[8, 8, 0, 0]}
                     />
